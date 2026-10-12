@@ -255,6 +255,7 @@ async function edhFetch(path){
     try{
       const r = await fetch(url);
       if (r.status === 404) return null;
+      if (r.status === 403 && edhMode === mode) return null; // EDHREC returns 403 for missing pages
       if (!r.ok) throw new Error('HTTP '+r.status);
       const j = await r.json();
       edhMode = mode;
@@ -356,7 +357,10 @@ function renderBrackets(){
   $('bracketNote').textContent = b.gcCap === 0 ? 'No Game Changers allowed.' : b.gcCap === 3 ? 'Up to 3 Game Changers.' : 'Game Changers unrestricted.';
 }
 
-function setStatus(t, err){ const s=$('status'); s.textContent=t; s.className='status'+(err?' err':''); }
+function setStatus(t, err){
+  if (err && /load failed|failed to fetch|networkerror/i.test(t))
+    t = "Can't reach Scryfall/EDHREC from here. Previews inside the Claude app block network calls — open the deployed pages.dev site in Safari.";
+  const s=$('status'); s.textContent=t; s.className='status'+(err?' err':''); }
 
 async function build(){
   $('go').disabled = true;
@@ -366,12 +370,13 @@ async function build(){
   try{
     // Most specific page first, then relax.
     const paths = theme
-      ? [`${S.slug}/${theme}/${b.slug}`, `${S.slug}/${theme}`, `${S.slug}/${b.slug}`, S.slug]
+      ? [`${S.slug}/${theme}/${b.slug}`, `${S.slug}/${b.slug}/${theme}`, `${S.slug}/${theme}`, `${S.slug}/${b.slug}`, S.slug]
       : [`${S.slug}/${b.slug}`, S.slug];
     let page=null, used=null;
     for (const p of paths){
       setStatus('Fetching EDHREC: '+p+'…');
-      const j = await edhFetch('commanders/'+p);
+      let j = null;
+      try{ j = await edhFetch('commanders/'+p); }catch(e){ if (p === S.slug) throw e; continue; }
       const decks = j?.container?.json_dict?.card?.num_decks ?? 0;
       if (j && j.container && (decks >= 20 || p === S.slug)){ page=j; used=p; break; }
     }
@@ -383,7 +388,7 @@ async function build(){
     try{ meta = await scryCollection(pool.map(c=>c.name)); }catch{ metaOk = false; }
     const res = buildDeck({page, pool, meta, commanders:cmdNames, colorIdentity:S.ci, bracket:b, synergyWeight:w});
     if (!metaOk) res.warnings.push('Scryfall unreachable — Game Changer cap and type checks skipped.');
-    render(res, {page, used, theme, b, cmdNames, wantedPath: theme?`${S.slug}/${theme}/${b.slug}`:`${S.slug}/${b.slug}`});
+    render(res, {page, used, theme, b, cmdNames, wantedPath: theme?`${S.slug}/${theme}/${b.slug}`:`${S.slug}/${b.slug}`, altPath: theme?`${S.slug}/${b.slug}/${theme}`:null});
     setStatus('');
   }catch(e){ setStatus(e.message, true); }
   $('go').disabled = false;
@@ -392,7 +397,7 @@ async function build(){
 function render(res, ctx){
   const out = $('out'); out.style.display='block';
   const decks = ctx.page.container?.json_dict?.card?.num_decks;
-  const fell = ctx.used !== ctx.wantedPath;
+  const fell = ctx.used !== ctx.wantedPath && ctx.used !== ctx.altPath;
   const groups = {};
   for (const c of res.spells) (groups[c.type] ||= []).push(c);
   const order = ['Creature','Planeswalker','Battle','Instant','Sorcery','Artifact','Enchantment','Other'];
